@@ -10,7 +10,9 @@ setup(
         "dotenv",
         "plotly",
         "matplotlib",
-        "colorcet"
+        "colorcet",
+        "nbformat>=4.2.0",
+        "kaleido"
     ],
     author="Brandyn Hamilton",
     author_email="brandynham1120@gmail.com",
