@@ -1,0 +1,6 @@
+pandas
+numpy
+dotenv
+plotly
+matplotlib
+colorcet
