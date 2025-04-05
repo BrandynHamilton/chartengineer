@@ -1,4 +1,4 @@
-# 📊 chartengineer
+# 📊 `chartengineer` Documentation
 
 **chartengineer** is a lightweight Python package for building publication-ready, highly customizable Plotly charts from pandas DataFrames.
 
