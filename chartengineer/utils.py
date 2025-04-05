@@ -74,3 +74,68 @@ def colors(shuffle=False):
         random.shuffle(lib_colors)
     
     return lib_colors
+
+def to_percentage(df, sum_col, index_col, percent=True):
+
+    df_copy = df.copy()
+
+    df_copy = df_copy.groupby(index_col)[sum_col].sum().reset_index()
+
+    # Calculate total usd_revenue
+    total = df[sum_col].sum()
+
+    if percent:
+
+        # Add a new column for percentage
+        df_copy['percentage'] = (df_copy[sum_col] / total) * 100
+        df_copy['legend_label'] = df_copy.apply(lambda x: f"{x[index_col]} ({x['percentage']:.1f}%)", axis=1)
+        df_copy.set_index('legend_label', inplace=True)
+    else:
+        df_copy.set_index(index_col, inplace=True)
+        print(f'df_copy: {df_copy}')
+    
+    df_copy.sort_values(by=sum_col, ascending=False, inplace=True)
+    df_copy.drop_duplicates(inplace=True)
+
+    return df_copy, total
+
+def normalize_to_percent(df,num_col=None):
+    print(f'num_col: {num_col}')
+
+    if num_col == None:
+    
+        df_copy = df.copy()
+
+        df_copy['total'] = df_copy.sum(axis=1)
+        # Exclude the 'total_transactions' column from the percentage calculation
+        chains_columns = df_copy.columns.difference(['total'])
+
+        for col in chains_columns:
+            df_copy[f'{col}_percentage'] = (df_copy[col] / df_copy['total']) * 100
+
+        # Drop the 'total_transactions' column if you don't need it
+        df_copy = df_copy.drop(columns=['total'])
+
+        percent_cols = [col for col in df_copy.columns if '_percentage' in col]
+        df_copy = df_copy[percent_cols]
+
+        df_copy.columns = df_copy.columns.str.replace('_percentage', '', regex=False)
+
+        print(f'percent_cols:{df_copy.columns}')
+    else:
+        df_copy = df.copy()
+        total = df_copy.groupby(df_copy.index)[num_col].sum()
+        total = total.to_frame(f'total_{num_col}')
+        df_copy = df_copy.merge(total, left_index=True, right_index=True, how='inner')
+        # Calculate percentage of daily active users for each app
+        df_copy['percentage'] = (df_copy[num_col] / df_copy[f'total_{num_col}']) * 100
+
+        # Drop the total_active_users column if no longer needed
+        df_copy = df_copy.drop(columns=[f'total_{num_col}'])
+        df_copy.drop(columns=num_col,inplace=True)
+
+        df_copy.rename(columns={"percentage":num_col},inplace=True)
+
+    df_copy.drop_duplicates(inplace=True)
+
+    return df_copy

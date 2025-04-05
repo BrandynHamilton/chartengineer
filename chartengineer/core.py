@@ -8,14 +8,15 @@ from pandas.api.types import is_datetime64_any_dtype
 import pandas as pd
 import os
 
-from chartengineer.utils import (colors, clean_values)
+from chartengineer.utils import (colors, clean_values,to_percentage,normalize_to_percent)
 
 trace_map = {
     "line": Scatter,
     "area": Scatter,
     "scatter": Scatter,
     "bar": Bar,
-    "candlestick": go.Candlestick
+    "candlestick": go.Candlestick,
+    "pie": go.Pie
 }
 
 class ChartMaker:
@@ -61,7 +62,8 @@ class ChartMaker:
             'save_directory': None,
             'space_buffer': 5,
             'descending': True,
-            'datetime_format': '%b. %d, %Y'
+            'datetime_format': '%b. %d, %Y',
+            'normalize': False
         }
         
     def get_next_color(self):
@@ -116,178 +118,304 @@ class ChartMaker:
         }
         return sort_list, color_map
     
-    def build(self, df, axes_data, title, chart_type={"y1":"line","y2":"line"}, options=None,
-            groupby_col=None, num_col=None,):
+    def build(self, df, title, axes_data=None, chart_type={"y1": "line", "y2": "line"}, options=None,
+            groupby_col=None, num_col=None):
         options = options or {}
+        axes_data = axes_data or {}
+
         merged_opts = {**self.default_options, **options}
 
-        self.df = df if self.df is None else pd.concat([self.df, df]).drop_duplicates()
+        if merged_opts.get('normalize') == True:
+            print(f'normalizing to % ...')
+            df = normalize_to_percent(df=df,num_col=num_col)
 
+        self.df = df if self.df is None else pd.concat([self.df, df]).drop_duplicates()
         self.merged_opts = merged_opts
         self.title = title
-
-        self.save_directory = merged_opts.get('save_directory',None)
-
-        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        self.save_directory = merged_opts.get('save_directory', None)
         plotted_cols = []
 
         space_buffer = " " * merged_opts.get('space_buffer')
 
-        # Default X to index if datetime
+        # Detect if a pie chart was requested as a string
+        if isinstance(chart_type, str):
+            if chart_type.lower() == "pie":
+                kind = "pie"
+            elif chart_type.lower() == 'heatmap':
+                kind='heatmap'
+            else:
+                chart_type = {"y1": chart_type, "y2": chart_type}
+                kind = None
+        else:
+            kind = None
+        
+        # === PIE CHART HANDLING ===
+        if kind == "pie":
+            if groupby_col and num_col:
+                index_col = groupby_col
+                sum_col = num_col
+            else:
+                sum_col = axes_data.get("y1", [])[0] if isinstance(axes_data.get("y1"), list) else axes_data.get("y1")
+                index_col = axes_data.get("x") or df.index.name or df.index
+
+            if not sum_col or not index_col:
+                raise ValueError("For pie chart, either (groupby_col and num_col) or axes_data['x'] and ['y1'] must be provided.")
+
+            # Extract merged options with fallbacks to the pie_chart function defaults
+            colors = merged_opts.get("colors", self.colors)
+            bgcolor = merged_opts.get("bgcolor", "rgba(0,0,0,0)")
+            annotation_prefix = merged_opts.get("tickprefix", {}).get("y1") or ""
+            annotation_suffix = merged_opts.get("ticksuffix", {}).get("y1") or ""
+            annotation_font_size = merged_opts.get("annotation_font_size", 25)
+            decimals = merged_opts.get("decimals", True)
+            decimal_places = merged_opts.get("decimal_places", 1)
+            legend_font_size = merged_opts.get("font_size", {}).get("legend", 16)
+            font_size = merged_opts.get("font_size", {}).get("axes", 18)
+            legend_placement = merged_opts.get("legend_placement", dict(x=0.01, y=1.1))
+            margin = merged_opts.get("margin", dict(l=0, r=0, t=0, b=0))
+            hole_size = merged_opts.get("hole_size", 0.6)
+            line_width = merged_opts.get("line_width", 0)
+            legend_orientation = merged_opts.get("legend_orientation", "v")
+            itemsizing = merged_opts.get("legend_background", {}).get("itemsizing", "constant")
+            dimensions = merged_opts.get("dimensions", dict(width=730, height=400))
+            font_family = merged_opts.get("font_family", "Cardo")
+            font_color = merged_opts.get("font_color", "black")
+            textinfo = merged_opts.get("textinfo", "none")
+            show_legend = merged_opts.get("show_legend", False)
+            text_font_size = merged_opts.get("font_size", {}).get("textfont", 12)
+            text_font_color = merged_opts.get("text_font_color", "black")
+            texttemplate = merged_opts.get("texttemplate", None)
+            annotation = merged_opts.get("annotations", True)
+            file_type = merged_opts.get("file_type", "svg")
+            directory = merged_opts.get("save_directory", "../img")
+
+            # Calculate percentages if needed
+            if textinfo == 'percent+label':
+                percent=False
+            else:
+                percent=True
+            df, total = to_percentage(df, sum_col, index_col, percent=percent)
+            padded_labels = [f"{label}    " for label in df.index]
+
+            fig = go.Figure(data=[
+                go.Pie(
+                    labels=padded_labels,
+                    values=df[sum_col],
+                    hole=hole_size,
+                    textinfo=textinfo,
+                    showlegend=show_legend,
+                    texttemplate=texttemplate,
+                    marker=dict(colors=colors, line=dict(color='white', width=line_width)),
+                    textfont=dict(
+                        family=font_family,
+                        size=text_font_size,
+                        color=text_font_color
+                    ),
+                )
+            ])
+
+            annote = None
+            if annotation:
+                annote = [dict(
+                    text=f"Total: {annotation_prefix}{clean_values(total, decimals=decimals, decimal_places=decimal_places)}{annotation_suffix}",
+                    x=0.5, y=0.5,
+                    font=dict(size=annotation_font_size, family=font_family, color=font_color),
+                    showarrow=False,
+                    xref='paper', yref='paper', align='center'
+                )]
+
+            fig.update_layout(
+                template="plotly_white",
+                plot_bgcolor=bgcolor,
+                paper_bgcolor=bgcolor,
+                width=dimensions.get("width"),
+                height=dimensions.get("height"),
+                margin=margin,
+                font=dict(size=font_size, family=font_family),
+                annotations=annote,
+                legend=dict(
+                    yanchor="top",
+                    y=legend_placement.get("y", 1.1),
+                    xanchor="left",
+                    x=legend_placement.get("x", 0.01),
+                    orientation=legend_orientation,
+                    font=dict(size=legend_font_size, family=font_family, color=font_color),
+                    bgcolor='rgba(0,0,0,0)',
+                    itemsizing=itemsizing
+                )
+            )
+
+            self.fig = fig
+            return  # Skip the rest for pie charts
+        
+        print(f'kind: {kind}')
+        print(f'chart_type: {chart_type}')
+
+        # === HEATMAP CHART HANDLING ===
+        if kind == "heatmap":
+            print(f'kind: {kind}')
+            x_col = axes_data.get("x")
+            y_col = axes_data.get("y1", [])[0] if isinstance(axes_data.get("y1"), list) else axes_data.get("y1")
+            z_col = num_col or y_col
+
+            if not x_col or not y_col or not z_col:
+                raise ValueError("Heatmap requires axes_data['x'] and axes_data['y1'] or groupby_col + num_col.")
+
+            color_base = merged_opts.get("heatmap_color", "#1f77b4")
+            width = merged_opts.get("dimensions", {}).get("width", 800)
+            height = merged_opts.get("dimensions", {}).get("height", 500)
+            margins = merged_opts.get("margin", dict(t=50, b=50, l=50, r=50))
+            font_size = merged_opts.get("font_size", {}).get("axes", 12)
+            legend_font_size = merged_opts.get("font_size", {}).get("legend", 10)
+            tick_color = merged_opts.get("font_color", "#333")
+            tick_suffix = merged_opts.get("ticksuffix", {}).get("y1", "")
+            bg_color = merged_opts.get("bgcolor", "#ffffff")
+
+            colorscale = [[0, "white"], [1, color_base]]
+            fig = go.Figure(data=go.Heatmap(
+                z=df[z_col],
+                x=df[x_col],
+                y=df[y_col],
+                colorscale=colorscale,
+                colorbar=dict(
+                    title=dict(
+                        text=z_col.replace("_", " ").title(),
+                        font=dict(size=legend_font_size, color=tick_color)
+                    ),
+                    tickfont=dict(size=legend_font_size, color=tick_color)
+                )
+            ))
+
+            fig.update_layout(
+                title=title,
+                width=width,
+                height=height,
+                xaxis_title=x_col.replace("_", " ").title(),
+                yaxis_title=y_col.replace("_", " ").title(),
+                font=dict(size=font_size, color=tick_color),
+                margin=margins,
+                plot_bgcolor=bg_color,
+                paper_bgcolor=bg_color,
+            )
+
+            fig.update_xaxes(ticksuffix=tick_suffix)
+
+            self.fig = fig
+            return  # skip rest
+
+        # === STANDARD CHART HANDLING (line, bar, etc.) ===
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+
         if axes_data.get('x') is None and is_datetime64_any_dtype(df.index):
             axes_data['x'] = df.index.name if df.index.name else df.index
 
-        # Normalize chart_type to support dict input
-        if isinstance(chart_type, str):
-            chart_type = {"y1": chart_type, "y2": chart_type}
-
         if groupby_col and num_col:
+            print(f'groupby and numcol passed')
             sort_list, color_map = self._prepare_grouped_series(
-                df, groupby_col, num_col, descending = merged_opts.get('descending',True), 
-                cumulative_sort = merged_opts.get('cumulative_sort',True)
+                df, groupby_col, num_col,
+                descending=merged_opts.get('descending', True),
+                cumulative_sort=merged_opts.get('cumulative_sort', True)
             )
-            # Iterate and plot each group
             for i in sort_list:
                 i_df = df[df[groupby_col] == i]
                 color = color_map.get(i)
+
                 fig.add_trace(
-                    go.Scatter(
-                        x=i_df.index,
-                        y=i_df[num_col],
-                        name=f'{i} ({clean_values(i_df[num_col].iloc[-1])})',
-                        line=dict(color=color, width=merged_opts.get("line_width", 3)),
-                        mode=merged_opts.get("mode", "lines"),
-                        showlegend=merged_opts.get("show_legend", False)
+                    go.Bar(
+                        x=[i],  # Plot each group once on the x-axis
+                        y=[i_df[num_col].values[-1]],  # Use last value (or sum/mean if preferred)
+                        name=f'{i} ({merged_opts.get("tickprefix").get("y1") or ""}{clean_values(i_df[num_col].values[-1], decimals=merged_opts["decimals"], decimal_places=merged_opts["decimal_places"])}{merged_opts.get("ticksuffix").get("y1") or ""})',
+                        marker=dict(color=color),
+                        showlegend=merged_opts.get("show_legend", False),
+                        textposition='auto' if merged_opts.get("show_text") else None
                     ),
                     secondary_y=False
                 )
-                self.series.append({
-                    "col": df[col],
-                    "name": name,
-                })
+                self.series.append({"col": df[num_col], "name": i})
         else:
-            # Primary Y
-            for col in axes_data.get('y1', []):
-                if col not in df.columns:
-                    continue
-                color = self.get_next_color()
-                kind = chart_type.get("y1", "line").lower()
-                trace_class = trace_map.get(kind, Scatter)
+            for axis in ['y1', 'y2']:
+                secondary = axis == 'y2'
+                for col in axes_data.get(axis, []):
+                    if col not in df.columns:
+                        continue
+                    color = self.get_next_color()
+                    kind = chart_type.get(axis, "line").lower()
+                    trace_class = trace_map.get(kind, go.Scatter)
 
-                name = f"{col.replace('_', ' ').upper()} ({merged_opts.get('tickprefix').get('y1') or ''}{clean_values(df[col].iloc[-1], decimals=merged_opts['decimals'], decimal_places=merged_opts['decimal_places'])}{merged_opts.get('ticksuffix').get('y1')or ''}){space_buffer}"
-                trace_args = {
-                    "x": df.index,
-                    "y": df[col],
-                    "name": name,
-                    "showlegend": merged_opts.get("show_legend", False)
-                }
-                if kind in ['line', 'area', 'scatter']:
-                    trace_args["line"] = dict(color=color, width=merged_opts.get("line_width", 3))
-                    trace_args["mode"] = merged_opts.get("mode", "lines")
-                    if kind == 'area':
-                        trace_args["stackgroup"] = 'one'
-                elif kind == 'bar':
-                    trace_args["marker"] = dict(color=color)
+                    name = f"{col.replace('_', ' ').upper()} ({merged_opts.get('tickprefix').get(axis) or ''}{clean_values(df[col].iloc[-1], decimals=merged_opts['decimals'], decimal_places=merged_opts['decimal_places'])}{merged_opts.get('ticksuffix').get(axis) or ''}){space_buffer}"
+                    trace_args = {
+                        "x": df.index,
+                        "y": df[col],
+                        "name": name,
+                        "showlegend": merged_opts.get("show_legend", False)
+                    }
 
-                fig.add_trace(trace_class(**trace_args), secondary_y=False)
-                self.series.append({
-                    "col": df[col],
-                    "name": name,
-                })
-                plotted_cols.append(col)
+                    if kind in ['line', 'area', 'scatter']:
+                        trace_args["line"] = dict(color=color, width=merged_opts.get("line_width", 3))
+                        trace_args["mode"] = merged_opts.get("mode", "lines")
+                        if kind == 'area':
+                            trace_args["stackgroup"] = 'one'
+                    elif kind == 'bar':
+                        trace_args["marker"] = dict(color=color)
 
-            # Secondary Y
-            for col in axes_data.get('y2', []):
-                if col not in df.columns:
-                    continue
-                color = self.get_next_color()
-                kind = chart_type.get("y2", "line").lower()
-                trace_class = trace_map.get(kind, Scatter)
+                    fig.add_trace(trace_class(**trace_args), secondary_y=secondary)
+                    self.series.append({"col": df[col], "name": name})
+                    plotted_cols.append(col)
 
-                name = f"{col.replace('_', ' ').upper()} ({merged_opts.get('tickprefix').get('y2') or ''}{clean_values(df[col].iloc[-1], decimals=merged_opts['decimals'], decimal_places=merged_opts['decimal_places'])}{merged_opts.get('ticksuffix').get('y2') or ''}){space_buffer}"
-                trace_args = {
-                    "x": df.index,
-                    "y": df[col],
-                    "name": name,
-                    "showlegend": merged_opts.get("show_legend", False)
-                }
-                if kind in ['line', 'area', 'scatter']:
-                    trace_args["line"] = dict(color=color, width=merged_opts.get("line_width", 3))
-                    trace_args["mode"] = merged_opts.get("mode", "lines")
-                    if kind == 'area':
-                        trace_args["stackgroup"] = 'one'
-                elif kind == 'bar':
-                    trace_args["marker"] = dict(color=color)
+        # Layout config
+        fig.update_layout(
+            xaxis_title=merged_opts.get('axes_titles').get('x', ''),
+            legend=dict(
+                x=merged_opts.get('legend_placement').get('x'),
+                y=merged_opts.get('legend_placement').get('y'),
+                orientation=merged_opts["legend_orientation"],
+                xanchor=merged_opts.get('xanchor', 'left'),
+                yanchor=merged_opts.get('yanchor', 'top'),
+                bgcolor=merged_opts.get('legend_background').get('bgcolor'),
+                bordercolor=merged_opts.get('legend_background').get('bordercolor'),
+                borderwidth=merged_opts.get('legend_background').get('borderwidth'),
+                traceorder=merged_opts.get('legend_background').get('traceorder')
+            ),
+            template='plotly_white',
+            hovermode='x unified',
+            width=merged_opts.get('dimensions').get('width'),
+            height=merged_opts.get('dimensions').get('height'),
+            margin=merged_opts["margin"],
+            font=dict(color=merged_opts["font_color"], family=merged_opts["font_family"]),
+            autosize=merged_opts["autosize"],
+            barmode=merged_opts['barmode'],
+        )
 
-                fig.add_trace(trace_class(**trace_args), secondary_y=True)
-                self.series.append({
-                    "col": df[col],
-                    "name": name,
-                })
-                plotted_cols.append(col)
-
-            # Layout
-            fig.update_layout(
-                xaxis_title=merged_opts.get('axes_titles').get('x',''),
-                legend=dict(
-                    x=merged_opts.get('legend_placement').get('x'), 
-                    y=merged_opts.get('legend_placement').get('y'), 
-                    orientation=merged_opts["legend_orientation"],
-                    xanchor=merged_opts.get('xanchor','left'),
-                    yanchor=merged_opts.get('yanchor','top'),
-                    bgcolor=merged_opts.get('legend_background').get('bgcolor'),
-                    bordercolor=merged_opts.get('legend_background').get('bordercolor'),
-                    borderwidth=merged_opts.get('legend_background').get('borderwidth'),
-                    traceorder=merged_opts.get('legend_background').get('traceorder')
-                ),
-                template='plotly_white',
-                hovermode='x unified',
-                width=merged_opts.get('dimensions').get('width'),
-                height=merged_opts.get('dimensions').get('height'),
-                margin=merged_opts["margin"],
-                font=dict(color=merged_opts["font_color"], family=merged_opts["font_family"]),
-                autosize=merged_opts["autosize"],
-                barmode=merged_opts['barmode'],
+        if merged_opts.get('auto_title'):
+            y1_title_text = axes_data.get('y1', [''])[0].replace("_", " ").upper() if axes_data.get('y1') else None
+            y2_title_text = (
+                axes_data.get('y2', [''])[0].replace("_", " ").upper()
+                if axes_data.get('y2') and len(axes_data.get('y2')) > 0
+                else None
             )
+        else:
+            y1_title_text = merged_opts.get('axes_titles').get('y1', '')
+            y2_title_text = merged_opts.get('axes_titles').get('y2', '')
 
-            if merged_opts.get('auto_title'):
-                y1_title_text = axes_data.get('y1', [''])[0].replace("_", " ").upper() if axes_data.get('y1') else None
-                y2_title_text = (
-                    axes_data.get('y2', [''])[0].replace("_", " ").upper() 
-                    if axes_data.get('y2') and len(axes_data.get('y2')) > 0 
-                    else None
-                )
-            else:
-                y1_title_text = merged_opts.get('axes_titles').get('y1','')
-                y2_title_text = merged_opts.get('axes_titles').get('y2','')
+        if not axes_data.get('y2'):
+            merged_opts['auto_color'] = False
 
-            # Auto color handling
-            if not axes_data.get('y2'):  # Empty or None
-                merged_opts['auto_color'] = False
+        y1_color = self.colors[0] if merged_opts.get('auto_color') else 'black'
+        y2_color = self.colors[1] if merged_opts.get('auto_color') else 'black'
 
-            if merged_opts.get('auto_color'):
-                y1_color = self.colors[0]
-                y2_color = self.colors[1]
-            else:
-                y1_color = 'black'
-                y2_color = 'black'
+        fig.update_yaxes(
+            title_text=y1_title_text, secondary_y=False, color=y1_color,
+            tickprefix=merged_opts.get('tickprefix', {}).get('y1', ''),
+            ticksuffix=merged_opts.get('ticksuffix', {}).get('y1', '')
+        )
+        fig.update_yaxes(
+            title_text=y2_title_text, secondary_y=True, color=y2_color,
+            tickprefix=merged_opts.get('tickprefix', {}).get('y2', ''),
+            ticksuffix=merged_opts.get('ticksuffix', {}).get('y2', '')
+        )
+        fig.update_xaxes(tickfont=dict(color=merged_opts['font_color']))
 
-            # Apply y-axis titles and colors
-            fig.update_yaxes(
-                title_text=y1_title_text, secondary_y=False, color=y1_color,
-                tickprefix=merged_opts.get('tickprefix', {}).get('y1', ''),
-                ticksuffix=merged_opts.get('ticksuffix', {}).get('y1', '')
-            )
-            fig.update_yaxes(
-                title_text=y2_title_text, secondary_y=True, color=y2_color,
-                tickprefix=merged_opts.get('tickprefix', {}).get('y2', ''),
-                ticksuffix=merged_opts.get('ticksuffix', {}).get('y2', '')
-            )
-
-            fig.update_xaxes(tickfont=dict(color=merged_opts['font_color']))
-
-            self.fig = fig
-
+        self.fig = fig
 
     def add_title(self,title=None,subtitle=None, x=0.25, y=0.9):
         # Add a title and subtitle
@@ -301,7 +429,7 @@ class ChartMaker:
             title_position['y'] = y
 
         if title == None:
-            title=""
+            title=self.title
         if subtitle == None:
             subtitle=""
 
@@ -355,8 +483,6 @@ class ChartMaker:
         last_val = df[y1_col].iloc[0]
         last_idx = df.index[0]
         last_text = f'{last_idx.strftime(datetime_format) if datetime_tick else last_idx}:<br>{tickprefix}{clean_values(last_val, decimal_places=decimal_places, decimals=decimals)}{ticksuffix}'
-
-        print(f'last_text: {last_text}')
 
         # First value annotation
         first_val = df[y1_col].iloc[-1]
