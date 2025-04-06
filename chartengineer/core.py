@@ -63,6 +63,7 @@ class ChartMaker:
             'space_buffer': 5,
             'descending': True,
             'datetime_format': '%b. %d, %Y',
+            'tickformat': dict(x=None,y1=None,y2=None),
             'normalize': False
         }
         
@@ -406,14 +407,19 @@ class ChartMaker:
         fig.update_yaxes(
             title_text=y1_title_text, secondary_y=False, color=y1_color,
             tickprefix=merged_opts.get('tickprefix', {}).get('y1', ''),
-            ticksuffix=merged_opts.get('ticksuffix', {}).get('y1', '')
+            ticksuffix=merged_opts.get('ticksuffix', {}).get('y1', ''),
+            tickformat=merged_opts.get('tickformat', {}).get('y1', ''),
         )
         fig.update_yaxes(
             title_text=y2_title_text, secondary_y=True, color=y2_color,
             tickprefix=merged_opts.get('tickprefix', {}).get('y2', ''),
-            ticksuffix=merged_opts.get('ticksuffix', {}).get('y2', '')
+            ticksuffix=merged_opts.get('ticksuffix', {}).get('y2', ''),
+            tickformat=merged_opts.get('tickformat', {}).get('y2', ''),
         )
-        fig.update_xaxes(tickfont=dict(color=merged_opts['font_color']))
+        fig.update_xaxes(
+            tickfont=dict(color=merged_opts['font_color']),
+            tickformat=merged_opts.get('tickformat', {}).get('x', '')
+        )
 
         self.fig = fig
 
@@ -479,15 +485,20 @@ class ChartMaker:
         # Determine if index is datetime
         datetime_tick = pd.api.types.is_datetime64_any_dtype(df.index)
 
-        # Last value annotation
-        last_val = df[y1_col].iloc[0]
-        last_idx = df.index[0]
-        last_text = f'{last_idx.strftime(datetime_format) if datetime_tick else last_idx}:<br>{tickprefix}{clean_values(last_val, decimal_places=decimal_places, decimals=decimals)}{ticksuffix}'
+        print(f'df: {df}')
 
-        # First value annotation
-        first_val = df[y1_col].iloc[-1]
-        first_idx = df.index[-1]
+        df = df.sort_index()  # Ensure consistent order
+
+        first_idx = df.index[0]
+        first_val = df.loc[first_idx, y1_col]
+
+        last_idx = df.index[-1]
+        last_val = df.loc[last_idx, y1_col]
+
         first_text = f'{first_idx.strftime(datetime_format) if datetime_tick else first_idx}:<br>{tickprefix}{clean_values(first_val, decimal_places=decimal_places, decimals=decimals)}{ticksuffix}'
+        last_text = f'{last_idx.strftime(datetime_format) if datetime_tick else last_idx}:<br>{tickprefix}{clean_values(last_val, decimal_places=decimal_places, decimals=decimals)}{ticksuffix}'
+        print(f'first_idx: {first_idx}')
+        print(f'last_idx: {last_idx}')
 
         if isinstance(fig.data[0], go.Pie):
             total = sum(fig.data[0].values)
@@ -522,7 +533,7 @@ class ChartMaker:
                 arrowhead=2,
                 arrowsize=1.5,
                 arrowwidth=1.5,
-                ax=-100,
+                ax=10,
                 ay=-50,
                 font=dict(size=text_font_size, family=font_family, color=font_color),
                 xref='x',
@@ -539,7 +550,7 @@ class ChartMaker:
                 arrowhead=2,
                 arrowsize=1.5,
                 arrowwidth=1.5,
-                ax=50,
+                ax=10,
                 ay=-50,
                 font=dict(size=text_font_size, family=font_family, color=font_color),
                 xref='x',
