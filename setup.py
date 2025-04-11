@@ -12,7 +12,7 @@ setup(
         "matplotlib",
         "colorcet",
         "nbformat>=4.2.0",
-        "kaleido"
+        "kaleido==0.1.0.post1"
     ],
     author="Brandyn Hamilton",
     author_email="brandynham1120@gmail.com",
