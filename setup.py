@@ -1,8 +1,8 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="chartengineer",  # Name of your package
-    version="0.1.0",  # Initial version
+    name="chartengineer",  
+    version="0.1.0", 
     packages=find_packages(),
     install_requires=[
         "pandas",
@@ -19,10 +19,10 @@ setup(
     description="Library for quick and modern chart building.",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
-    url=" ",  # optional
+    url=" ",  
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License",  # or whatever license
+        "License :: OSI Approved :: MIT License",  
         "Operating System :: OS Independent",
     ],
     python_requires='>=3.7',

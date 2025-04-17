@@ -1,2 +1,6 @@
 *.ipynb
 *.egg-info/
+pyproject.toml
+build
+dist
+chartengineer_env
