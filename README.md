@@ -150,8 +150,6 @@ options = {
 
 ---
 
----
-
 ## Contact
 
 Email: brandynham1120@gmail.com
