@@ -3,6 +3,7 @@ import plotly.graph_objects as go
 from plotly.graph_objects import Scatter, Bar
 import plotly.offline as pyo
 import plotly.io as pio
+import copy
 
 from pandas.api.types import is_datetime64_any_dtype
 import pandas as pd
@@ -13,7 +14,6 @@ from chartengineer.utils import (colors, clean_values,to_percentage,normalize_to
 trace_map = {
     "line": Scatter,
     "area": Scatter,
-    "scatter": Scatter,
     "bar": Bar,
     "pie": go.Pie
 }
@@ -72,7 +72,8 @@ class ChartMaker:
             'tickformat': dict(x=None,y1=None,y2=None),
             'normalize': False,
             'text_freq': 1,
-            'textposition':'top center' 
+            'textposition':'top center',
+            "orientation":'v'
         }
         
     def get_next_color(self):
@@ -115,16 +116,26 @@ class ChartMaker:
     def return_fig(self):
         return self.fig
     
-    def _prepare_grouped_series(self, df, groupby_col, num_col, descending=True, cumulative_sort=False):
+    def _prepare_grouped_series(self, df, groupby_col, num_col, descending=True, cumulative_sort=True):
         """
         Groups and sorts data for multi-line plots.
+        Supports cumulative or latest value sorting.
         Returns: list of sorted categories, color map
         """
-        sort_agg = df.groupby(groupby_col)[num_col].last().sort_values(ascending=not descending)
+        # Decide aggregation method based on cumulative_sort flag
+        if cumulative_sort:
+            # Sort by cumulative (sum) of the values
+            sort_agg = df.groupby(groupby_col)[num_col].sum().sort_values(ascending=not descending)
+        else:
+            # Sort by latest (last known) value
+            sort_agg = df.groupby(groupby_col)[num_col].last().sort_values(ascending=not descending)
+
         sort_list = sort_agg.index.tolist()
+
         color_map = {
             cat: self.get_next_color() for cat in sort_list
         }
+
         return sort_list, color_map
     
     def build(self, df, title, axes_data=None, chart_type={"y1": "line", "y2": "line"}, options=None,
@@ -132,7 +143,14 @@ class ChartMaker:
         options = options or {}
         axes_data = axes_data or {}
 
-        merged_opts = {**self.default_options, **options}
+        merged_opts = copy.deepcopy(self.default_options)
+
+        for key, val in (options or {}).items():
+            # if both default and override are dicts, update the nested dict
+            if key in merged_opts and isinstance(merged_opts[key], dict) and isinstance(val, dict):
+                merged_opts[key].update(val)
+            else:
+                merged_opts[key] = val
 
         if merged_opts.get('normalize') == True:
             print(f'normalizing to % ...')
@@ -140,6 +158,9 @@ class ChartMaker:
 
         self.df = df if self.df is None else pd.concat([self.df, df]).drop_duplicates()
         self.merged_opts = merged_opts
+
+        orientation = merged_opts.get("orientation", "v")
+
         self.title = title
         self.save_directory = merged_opts.get('save_directory', None)
         plotted_cols = []
@@ -256,13 +277,9 @@ class ChartMaker:
 
             self.fig = fig
             return  # Skip the rest for pie charts
-        
-        print(f'kind: {kind}')
-        print(f'chart_type: {chart_type}')
 
         # === HEATMAP CHART HANDLING ===
         if kind == "heatmap":
-            print(f'kind: {kind}')
             x_col = axes_data.get("x")
             y_col = axes_data.get("y1", [])[0] if isinstance(axes_data.get("y1"), list) else axes_data.get("y1")
             z_col = num_col or y_col
@@ -279,8 +296,6 @@ class ChartMaker:
             tick_color = merged_opts.get("font_color", "#333")
             tick_suffix = merged_opts.get("ticksuffix", {}).get("y1", "")
             bg_color = merged_opts.get("bgcolor", "#ffffff")
-
-            print(f'font_size: {font_size}')
 
             colorscale = [[0, "white"], [1, color_base]]
             fig = go.Figure(data=go.Heatmap(
@@ -316,12 +331,13 @@ class ChartMaker:
 
         # === STANDARD CHART HANDLING (line, bar, etc.) ===
         fig = make_subplots(specs=[[{"secondary_y": True}]])
+        fig.update_layout(xaxis2=dict(overlaying='x', side='top'))
 
         if axes_data.get('x') is None and is_datetime64_any_dtype(df.index):
             axes_data['x'] = df.index.name if df.index.name else df.index
 
         if groupby_col and num_col:
-            print(f'groupby and numcol passed')
+            print(f'groupby_col and num_col passed...')
             sort_list, color_map = self._prepare_grouped_series(
                 df, groupby_col, num_col,
                 descending=merged_opts.get('descending', True),
@@ -353,7 +369,6 @@ class ChartMaker:
                     ticksuffix = merged_opts.get("ticksuffix", {}).get(axis) or ''
                     text_freq = merged_opts.get("text_freq", 1)
                     textposition = merged_opts.get("textposition", "top center")
-                    print(f'textposition: {textposition}')
 
                     # Build text values per row (or single value if bar)
                     if kind == "bar":
@@ -371,12 +386,22 @@ class ChartMaker:
                 if kind == 'bar':
                     textposition = merged_opts.get("textposition", "auto")
                     if not pd.api.types.is_datetime64_any_dtype(df.index):
-                        trace_args.update({
-                            "x": [i],
-                            "y": [last_val],
-                            "marker": dict(color=color),
-                            "textposition": validate_textposition(kind, textposition)
-                        })
+                        if orientation == 'h':
+                            trace_args.update({
+                                "x": [last_val],
+                                "y": [i],
+                                "orientation":orientation,
+                                "marker": dict(color=color),
+                                "textposition": validate_textposition(kind, textposition)
+                            })
+                        else:
+                            trace_args.update({
+                                "x": [i],
+                                "y": [last_val],
+                                "orientation":orientation,
+                                "marker": dict(color=color),
+                                "textposition": validate_textposition(kind, textposition)
+                            })
                     else:
                         trace_args.update({
                             "x": i_df.index,
@@ -391,9 +416,9 @@ class ChartMaker:
                         "mode": merged_opts.get("mode", "lines"),
                         "line": dict(color=color, width=merged_opts.get("line_width", 3))
                     })
-                    if kind == 'area':
-                        trace_args["stackgroup"] = 'one'
-
+                if kind == 'area':
+                    trace_args["stackgroup"] = 'one'
+                
                 fig.add_trace(trace_class(**trace_args), secondary_y=secondary)
                 self.series.append({"col": i_df[num_col], "name": name})
         else:
@@ -402,21 +427,20 @@ class ChartMaker:
                 for col in axes_data.get(axis, []):
                     if col not in df.columns:
                         continue
+
                     color = self.get_next_color()
                     kind = chart_type.get(axis, "line").lower()
                     trace_class = trace_map.get(kind, go.Scatter)
 
-                    name = f"{col.replace('_', ' ').upper()} ({merged_opts.get('tickprefix').get(axis) or ''}{clean_values(df[col].iloc[-1], decimals=merged_opts['decimals'], decimal_places=merged_opts['decimal_places'])}{merged_opts.get('ticksuffix').get(axis) or ''}){space_buffer}"
-                    # === Dynamic text annotations at a given frequency ===
+                    name = f"{col.replace('_', ' ').upper()} ({merged_opts.get('tickprefix', {}).get(axis) or ''}{clean_values(df[col].iloc[-1], decimals=merged_opts.get('decimals', True), decimal_places=merged_opts.get('decimal_places', 1))}{merged_opts.get('ticksuffix', {}).get(axis) or ''}){space_buffer}"
+
                     text_bool = merged_opts.get('show_text', False)
                     text_freq = merged_opts.get('text_freq', None)
                     tickprefix = merged_opts.get("tickprefix", {}).get(axis) or ''
                     ticksuffix = merged_opts.get("ticksuffix", {}).get(axis) or ''
                     textposition = validate_textposition(kind, merged_opts.get("textposition"))
 
-                    # Determine if text should be shown
                     if text_bool and text_freq and col in df.columns:
-                        print(f'text_bool: {text_bool}')
                         text_values = [
                             f"{tickprefix}{clean_values(val, decimal_places=merged_opts.get('decimal_places', 1), decimals=merged_opts.get('decimals', True))}{ticksuffix}"
                             if i % text_freq == 0 else ""
@@ -424,28 +448,60 @@ class ChartMaker:
                         ]
                     else:
                         text_values = None
-                    trace_args = {
-                        "x": df.index,
-                        "y": df[col],
-                        "name": name,
-                        "text": text_values,
-                        "textposition":textposition if text_values else None,
-                        "showlegend": merged_opts.get("show_legend", False)
-                    }
-                    print(f'trace_args: {trace_args}')
 
-                    if kind in ['line', 'area', 'scatter']:
-                        trace_args["line"] = dict(color=color, width=merged_opts.get("line_width", 3))
-
-                        if text_values:
-                            trace_args["mode"] = "lines+text"
-                        else:
-                            trace_args["mode"] = merged_opts.get("mode", "lines")
-
-                        if kind == 'area':
-                            trace_args["stackgroup"] = 'one'
-                    elif kind == 'bar':
-                        trace_args["marker"] = dict(color=color)
+                    if orientation == 'h':
+                        if kind in ['line', 'area', 'scatter']:
+                            trace_args = {
+                                "x": df[col],
+                                "y": df.index,
+                                "name": name,
+                                "mode": "lines+text" if text_values else merged_opts.get("mode", "lines"),
+                                "line": dict(color=color, width=merged_opts.get("line_width", 3)),
+                                "text": text_values,
+                                "textposition": textposition if text_values else None,
+                                "showlegend": merged_opts.get("show_legend", False)
+                            }
+                            if kind == 'area':
+                                trace_args["stackgroup"] = 'one'
+                        elif kind == 'bar':
+                            trace_args = {
+                                "x": df[col],
+                                "y": df.index,
+                                "name": name,
+                                "orientation": "h",
+                                "marker": dict(color=color),
+                                "text": text_values,
+                                "textposition": textposition if text_values else None,
+                                "showlegend": merged_opts.get("show_legend", False)
+                            }
+                    else:
+                        if kind in ['line', 'area', 'scatter']:
+                            trace_args = {
+                                "x": df.index,
+                                "y": df[col],
+                                "name": name,
+                                "mode": "lines+text" if text_values else merged_opts.get("mode", "lines"),
+                                "line": dict(color=color, width=merged_opts.get("line_width", 3)),
+                                "text": text_values,
+                                "textposition": textposition if text_values else None,
+                                "showlegend": merged_opts.get("show_legend", False)
+                            }
+                            if kind == 'area':
+                                trace_args["stackgroup"] = 'one'
+                        elif kind == 'bar':
+                            trace_args = {
+                                "x": df.index,
+                                "y": df[col],
+                                "name": name,
+                                "orientation": "v",
+                                "marker": dict(color=color),
+                                "text": text_values,
+                                "textposition": textposition if text_values else None,
+                                "showlegend": merged_opts.get("show_legend", False)
+                            }
+                    if orientation == "h" and secondary:
+                        trace_args["xaxis"] = "x2"
+                        trace_args["yaxis"] = "y"
 
                     fig.add_trace(trace_class(**trace_args), secondary_y=secondary)
                     self.series.append({"col": df[col], "name": name})
@@ -493,32 +549,71 @@ class ChartMaker:
         y1_color = self.colors[0] if merged_opts.get('auto_color') else 'black'
         y2_color = self.colors[1] if merged_opts.get('auto_color') else 'black'
 
-        # Determine whether to hide y-axis based on chart kind and show_text
-        hide_yaxis = (
+        # determine if we should hide the “value” axis when we're only showing text on bars
+        hide_vals = (
             merged_opts.get("show_text", False)
-            and all(chart_type.get(axis, "").lower() == "bar" for axis in chart_type)
+            and all(chart_type.get(ax, "").lower() == "bar" for ax in chart_type)
         )
 
+        if orientation == "h" and axes_data.get('y2'):
+            fig.update_layout(
+                xaxis2=dict(
+                    side="top",
+                    overlaying="x",
+                    anchor="y",
+                    title=y2_title_text,
+                    tickfont=dict(color=y2_color),
+                    tickprefix=merged_opts.get("tickprefix", {}).get("y2", ""),
+                    ticksuffix=merged_opts.get("ticksuffix", {}).get("y2", ""),
+                    tickformat=merged_opts.get("tickformat", {}).get("y2", "")
+                )
+            )
 
-        fig.update_yaxes(
-            title_text='' if hide_yaxis else y1_title_text,
-            secondary_y=False,
-            color=y1_color if not hide_yaxis else 'rgba(0,0,0,0)',
-            showticklabels=not hide_yaxis,
-            tickprefix='' if hide_yaxis else merged_opts.get('tickprefix', {}).get('y1', ''),
-            ticksuffix='' if hide_yaxis else merged_opts.get('ticksuffix', {}).get('y1', ''),
-            tickformat='' if hide_yaxis else merged_opts.get('tickformat', {}).get('y1', ''),
-        )
-        fig.update_yaxes(
-            title_text=y2_title_text, secondary_y=True, color=y2_color,
-            tickprefix=merged_opts.get('tickprefix', {}).get('y2', ''),
-            ticksuffix=merged_opts.get('ticksuffix', {}).get('y2', ''),
-            tickformat=merged_opts.get('tickformat', {}).get('y2', ''),
-        )
-        fig.update_xaxes(
-            tickfont=dict(color=merged_opts['font_color']),
-            tickformat=merged_opts.get('tickformat', {}).get('x', '')
-        )
+        if orientation == "h":
+            # ─── horizontal: hide x‐axis if hiding values ───
+            fig.update_xaxes(
+                title_text="" if hide_vals else y1_title_text,
+                color=y1_color if not hide_vals else "rgba(0,0,0,0)",
+                showticklabels=not hide_vals,
+                tickprefix=merged_opts.get("tickprefix", {}).get("y1", ""),
+                ticksuffix=merged_opts.get("ticksuffix", {}).get("y1", ""),
+                tickformat=merged_opts.get("tickformat", {}).get("x", ""),
+                tickfont=dict(color=merged_opts["font_color"])
+            )
+            # leave y‐axis (categories) visible, label it with the x‐axis title
+            fig.update_yaxes(
+                title_text=merged_opts.get('axes_titles').get('x', ''),
+                color=merged_opts["font_color"],
+                tickfont=dict(color=merged_opts["font_color"])
+            )
+        else:
+            # ─── vertical: hide y1‐axis if hiding values ───
+            fig.update_yaxes(
+                title_text="" if hide_vals else y1_title_text,
+                secondary_y=False,
+                color=y1_color if not hide_vals else "rgba(0,0,0,0)",
+                showticklabels=not hide_vals,
+                tickprefix=merged_opts.get("tickprefix", {}).get("y1", ""),
+                ticksuffix=merged_opts.get("ticksuffix", {}).get("y1", ""),
+                tickformat=merged_opts.get("tickformat", {}).get("y1", ""),
+                tickfont=dict(color=merged_opts["font_color"])
+            )
+            # y2 (if used) remains visible
+            fig.update_yaxes(
+                title_text=y2_title_text,
+                secondary_y=True,
+                color=y2_color,
+                tickprefix=merged_opts.get("tickprefix", {}).get("y2", ""),
+                ticksuffix=merged_opts.get("ticksuffix", {}).get("y2", ""),
+                tickformat=merged_opts.get("tickformat", {}).get("y2", ""),
+                tickfont=dict(color=merged_opts["font_color"])
+            )
+            # always leave x‐axis visible
+            fig.update_xaxes(
+                title_text=merged_opts.get('axes_titles').get('x', ''),
+                tickfont=dict(color=merged_opts["font_color"]),
+                tickformat=merged_opts.get("tickformat", {}).get("x", "")
+            )
 
         # === Final Y-axis buffer adjustment for bar charts with outside text ===
         try:
@@ -536,19 +631,39 @@ class ChartMaker:
                     y_max = series.max()
                     y_min = series.min()
                     y_range = y_max - y_min
-                    y_buffer = y_range * 0.15  # Add 10% on both ends
+                    y_buffer = y_range * 0.15  # Add 15% buffer
 
-                    # Only apply a buffer upward if all values are positive
-                    if y_min >= 0:
-                        fig.update_yaxes(range=[0, y_max + y_buffer], secondary_y=False)
-                    # Only apply a buffer downward if all values are negative
-                    elif y_max <= 0:
-                        fig.update_yaxes(range=[y_min - y_buffer, 0], secondary_y=False)
-                    # Mixed case: apply buffer on both ends
+                    if orientation == 'v':
+                        # Adjust Y-axis (value axis for vertical)
+                        if y_min >= 0:
+                            fig.update_yaxes(range=[0, y_max + y_buffer], secondary_y=False)
+                        elif y_max <= 0:
+                            fig.update_yaxes(range=[y_min - y_buffer, 0], secondary_y=False)
+                        else:
+                            fig.update_yaxes(range=[y_min - y_buffer, y_max + y_buffer], secondary_y=False)
                     else:
-                        fig.update_yaxes(range=[y_min - y_buffer, y_max + y_buffer], secondary_y=False)
+                        # Adjust X-axis (value axis for horizontal)
+                        if y_min >= 0:
+                            fig.update_xaxes(range=[0, y_max + y_buffer])
+                        elif y_max <= 0:
+                            fig.update_xaxes(range=[y_min - y_buffer, 0])
+                        else:
+                            fig.update_xaxes(range=[y_min - y_buffer, y_max + y_buffer])
         except Exception as e:
-            print(f"Warning: could not apply Y-axis buffer: {e}")
+            print(f"Warning: could not apply axis buffer: {e}")
+
+        if pd.api.types.is_datetime64_any_dtype(df.index):
+            unique_days = df.index.to_series().diff().dt.days.dropna().mode().iloc[0]
+            
+            if unique_days >= 7:
+                # Only apply custom ticks if your index is monthly/weekly/etc
+                fig.update_xaxes(
+                    tickmode="array",
+                    tickvals=list(df.index)
+                )
+            else:
+                # Let Plotly decide for dense series
+                fig.update_xaxes(tickmode="auto")
 
         self.fig = fig
 
@@ -585,7 +700,7 @@ class ChartMaker:
     def add_annotations(self, max_annotation=True, custom_annotations=None, annotation_placement=dict(x=0.5,y=0.5)):
         if self.df is None or self.fig is None:
             return  # Cannot annotate without a figure and data
-
+        
         opts = self.merged_opts
         fig = self.fig
         df = self.df
@@ -614,8 +729,6 @@ class ChartMaker:
         # Determine if index is datetime
         datetime_tick = pd.api.types.is_datetime64_any_dtype(df.index)
 
-        print(f'df: {df}')
-
         df = df.sort_index()  # Ensure consistent order
 
         first_idx = df.index[0]
@@ -626,8 +739,6 @@ class ChartMaker:
 
         first_text = f'{first_idx.strftime(datetime_format) if datetime_tick else first_idx}:<br>{tickprefix}{clean_values(first_val, decimal_places=decimal_places, decimals=decimals)}{ticksuffix}'
         last_text = f'{last_idx.strftime(datetime_format) if datetime_tick else last_idx}:<br>{tickprefix}{clean_values(last_val, decimal_places=decimal_places, decimals=decimals)}{ticksuffix}'
-        print(f'first_idx: {first_idx}')
-        print(f'last_idx: {last_idx}')
 
         if isinstance(fig.data[0], go.Pie):
             total = sum(fig.data[0].values)
@@ -652,11 +763,14 @@ class ChartMaker:
             )
             fig.update_layout(annotations=[pie_annotation])
 
+        orientation = self.merged_opts.get("orientation", "v")
+
         if annotations:
-            # Add last annotation
+
+            # For the last point
             fig.add_annotation(dict(
-                x=last_idx,
-                y=last_val,
+                x=last_val if orientation == 'h' else last_idx,
+                y=last_idx if orientation == 'h' else last_val,
                 text=last_text,
                 showarrow=True,
                 arrowhead=2,
@@ -670,10 +784,10 @@ class ChartMaker:
                 arrowcolor='black'
             ))
 
-            # Add first annotation
+            # For the first point
             fig.add_annotation(dict(
-                x=first_idx,
-                y=first_val,
+                x=first_val if orientation == 'h' else first_idx,
+                y=first_idx if orientation == 'h' else first_val,
                 text=first_text,
                 showarrow=True,
                 arrowhead=2,
@@ -694,8 +808,8 @@ class ChartMaker:
 
             if max_idx not in [first_idx, last_idx]:
                 fig.add_annotation(dict(
-                    x=max_idx,
-                    y=max_val,
+                    x=max_val if orientation == 'h' else max_idx,
+                    y=max_idx if orientation == 'h' else max_val,
                     text=max_text,
                     showarrow=True,
                     arrowhead=2,
@@ -709,26 +823,26 @@ class ChartMaker:
                     arrowcolor='black'
                 ))
 
-            # Custom annotations
-            if custom_annotations:
-                for date, label in custom_annotations.items():
-                    if date in df.index:
-                        y_val = df.loc[date, y1_col]
-                        fig.add_annotation(dict(
-                            x=date,
-                            y=y_val,
-                            text=label,
-                            showarrow=True,
-                            arrowhead=2,
-                            arrowsize=1.5,
-                            arrowwidth=1.5,
-                            ax=-10,
-                            ay=-50,
-                            font=dict(size=text_font_size, family=font_family, color=font_color),
-                            xref='x',
-                            yref='y',
-                            arrowcolor='black'
-                        ))
+        # Custom annotations
+        if custom_annotations is not None and isinstance(custom_annotations, dict):
+            for date, label in custom_annotations.items():
+                if date in df.index:
+                    y_val = df.loc[date, y1_col]
+                    fig.add_annotation(dict(
+                        x=y_val if orientation == 'h' else date,
+                        y=date if orientation == 'h' else y_val,
+                        text=label,
+                        showarrow=True,
+                        arrowhead=2,
+                        arrowsize=1.5,
+                        arrowwidth=1.5,
+                        ax=-10,
+                        ay=-50,
+                        font=dict(size=text_font_size, family=font_family, color=font_color),
+                        xref='x',
+                        yref='y',
+                        arrowcolor='black'
+                    ))
 
     def add_dashed_line(self, date, annotation_text=None):
         if self.df is None or self.fig is None:
@@ -745,10 +859,9 @@ class ChartMaker:
         datetime_format = opts.get("datetime_format", "%b. %d, %Y")
         line_color = opts.get("dashed_line_color", "black")
         line_width = opts.get("dashed_line_width", 3)
-        line_factor = opts.get("dashed_line_factor", 1.0)  # Optional y-scaling
+        line_factor = opts.get("line_factor",1.5)
         cols_to_plot = [s["col"].name for s in self.series] if self.series else df.columns.tolist()
 
-        # Coerce to timestamp if datetime index
         if pd.api.types.is_datetime64_any_dtype(df.index):
             date = pd.to_datetime(date)
 
@@ -756,38 +869,62 @@ class ChartMaker:
             print(f"Error: {date} is not in the DataFrame index.")
             return
 
-        # Pick column for y-value (first plotted or max column at date)
         if len(cols_to_plot) == 1:
             col = cols_to_plot[0]
         else:
             col = df.loc[date, cols_to_plot].idxmax()
-        
+
         y_value = df.loc[date, col]
 
         if pd.isna(y_value):
             print(f"Warning: Missing value at {date} for {col}.")
             return
 
-        # Dashed vertical line
-        fig.add_shape(
-            type="line",
-            x0=date,
-            y0=0,
-            x1=date,
-            y1=y_value * line_factor,
-            line=dict(color=line_color, width=line_width, dash="dot"),
-        )
+        orientation = self.merged_opts.get("orientation", "v")
 
         if annotation_text is None:
             annotation_text = f"{col}: {clean_values(y_value)}"
 
-        fig.add_annotation(
-            x=date,
-            y=y_value * line_factor,
-            text=f"{annotation_text}<br>{pd.to_datetime(date).strftime(datetime_format)}",
-            showarrow=False,
-            font=dict(size=text_font_size, family=font_family, color=font_color),
-        )
+        if orientation == 'h':
+            fig.add_shape(
+                type="line",
+                x0=0,
+                y0=date,
+                x1=y_value * line_factor,  # <<< extend the line
+                y1=date,
+                line=dict(color=line_color, width=line_width, dash="dot"),
+            )
+            fig.add_annotation(
+                x=y_value * line_factor,  # <<< move annotation slightly out too
+                y=date,
+                text=f"{annotation_text}<br>{pd.to_datetime(date).strftime(datetime_format)}",
+                showarrow=False,
+                xanchor='left',
+                yanchor='middle',
+                font=dict(size=text_font_size, family=font_family, color=font_color)
+            )
+        else:
+            fig.add_shape(
+                type="line",
+                x0=date,
+                y0=0,
+                x1=date,
+                y1=y_value * line_factor,  # <<< extend the line vertically
+                line=dict(color=line_color, width=line_width, dash="dot"),
+            )
+            fig.add_annotation(
+                x=date,
+                y=y_value * line_factor,  # <<< move annotation slightly out too
+                text=f"{annotation_text}<br>{pd.to_datetime(date).strftime(datetime_format)}",
+                showarrow=False,
+                xanchor='center',
+                yanchor='bottom',
+                font=dict(size=text_font_size, family=font_family, color=font_color)
+            )
+
+
+
+
 
 
 

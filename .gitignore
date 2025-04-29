@@ -4,3 +4,5 @@ pyproject.toml
 build
 dist
 chartengineer_env
+ui.py
+rando_env

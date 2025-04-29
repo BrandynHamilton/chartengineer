@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="chartengineer",  
-    version="0.1.0", 
+    version="0.1.1", 
     packages=find_packages(),
     install_requires=[
         "pandas",
@@ -16,7 +16,7 @@ setup(
     ],
     author="Brandyn Hamilton",
     author_email="brandynham1120@gmail.com",
-    description="Library for quick and modern chart building.",
+    description="Plotly and Pandas wrapper for quick and modern chart building.",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     url=" ",  
